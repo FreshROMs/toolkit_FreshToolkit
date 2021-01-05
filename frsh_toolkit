@@ -1,0 +1,392 @@
+#!/sbin/sh
+# =========================================
+#  ___            _    ___  ___  __  __    
+# |  _|_ _ ___ __| |_ | _ \/ _ \|  \/  |___
+# |  _| '_/ -_|_-< ' \|   / (_) | |\/| (_-<
+# |_| |_| \___/__/_||_|_|_/ ___/|_|  |_/__/
+#                                          
+# =========================================
+# FreshROMs install toolkit - build 20210105
+# A toolkit used for addon and ROM installation
+# (C) 2019-2021 John Vincent - TenSeventy7@XDA
+
+# Variables used throughout the script
+EXEC=$1 # function to execute for updater-script. DO NOT EDIT.
+PROP="/tmp/frsh_install.prop" # prop file used to counter-check values for the script
+FLASH='/tmp/fresh.prop' # ROM prop file used for version checking
+DEVICE=$(grep 'ro.fresh.device=' /tmp/fresh_device.prop | sed 's/^ro.fresh.device=//') # device-checking prop
+SYSMOUNT=$(grep 'block.system.mount=' "${PROP}" | sed 's/^block.system.mount=//') # check if the system is mounted as SaR
+
+# Variables that depend on system-as-root (SaR)
+if [ "${SYSMOUNT}" == "/system_root" ]; then
+	ROM='/system_root/system/etc/fresh.prop' # system prop file used for version checking
+	ADDONS="/system_root/system/etc/fresh/addons" # addon metadata folder used in the ROM
+	INSTALLED_ADDONS_FULL=$(awk '{print}' "${ADDONS}/files-list/*.txt" | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
+else
+	ROM='/system/etc/fresh.prop' # system prop file used for version checking
+	ADDONS="/system/etc/fresh/addons" # addon metadata folder used in the ROM
+	INSTALLED_ADDONS_FULL=$(awk '{print}' "${ADDONS}/files-list/*.txt" | tr '\n' ' ')
+fi
+
+# Variables used by the addon and OMC backup services
+INSTALLED_OMC='/product/omc/sales_code.dat'
+INSTALLED_OMC_LIST='/product/omc/sales_code_list.dat'
+INSTALLED_OMC_CONFIG='/product/omc/SW_Configuration.xml'
+BACKUP_ADDONS_FOLDER='/data/frsh_install/addons_backup'
+BACKUP_OMC_FOLDER='/data/frsh_install/omc_backup'
+
+# Variables used by addon installer
+ADDON_PROP='/tmp/addon.prop'
+ADDON_LIST='/tmp/files-list.txt'
+ADDON_CODE=$(grep 'fresh.addon.code=' "${ADDON_PROP}" | sed 's/^fresh.addon.code=//')
+ADDON_BUILD=$(grep 'fresh.addon.version=' "${ADDON_PROP}" | sed 's/^fresh.addon.version=//')
+ADDON_INSTALLED_PROP="${ADDONS}/${ADDON_CODE}.prop"
+ADDON_INSTALLED_LIST="${ADDONS}/files-list/${ADDON_CODE}.txt"
+ADDON_INSTALLED_BUILD=$(grep 'fresh.addon.version=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.version=//')
+
+# Addon variables that depend on system-as-root (SaR)
+if [ "${SYSMOUNT}" == "/system_root" ]; then
+	ADDON_FILES=$(awk '{print}' "${ADDON_INSTALLED_LIST}" | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
+else
+	ADDON_FILES=$(awk '{print}' "${ADDON_INSTALLED_LIST}" | tr '\n' ' ')
+fi
+
+# Primary functions used throughout the toolkit
+set_installprop() {
+	# Pass props used during installation
+	if [ ! -e "${PROP}" ]; then
+		touch "${PROP}" # make the prop file if toolkit could not find it
+	fi
+	echo "${1}=${2}" >> "${PROP}" # pass properties to prop file
+}
+
+backup_omc_full() {
+	set_installprop "rom.exist.omc" "data-exist"
+	mkdir -p ${BACKUP_OMC_FOLDER}
+	cp -rf --parents --preserve=mode,ownership,timestamps,context "/product/omc" "${BACKUP_OMC_FOLDER}/"
+}
+
+restore_omc_full() {
+	cp -rfn --preserve=mode,ownership,timestamps,context "${BACKUP_OMC_FOLDER}/product/omc" "/product/"
+}
+
+restore_omc_withdata() {
+	cp -f /tmp/SW_Configuration.xml ${INSTALLED_OMC_CONFIG}
+	cp -f /tmp/sales_code_list.dat ${INSTALLED_OMC_LIST}
+	cp -f /tmp/sales_code.dat ${INSTALLED_OMC}
+}
+
+backup_omc() {
+	cp -f ${INSTALLED_OMC} "/tmp/sales_code.dat"
+	cp -f ${INSTALLED_OMC_LIST} "/tmp/sales_code_list.dat"
+	cp -f ${INSTALLED_OMC_CONFIG} "/tmp/SW_Configuration.xml"
+
+	INSTALLED_OMC_CODE=$(cat /tmp/sales_code.dat | tr -d '\n')
+
+	if [ ! -z "${INSTALLED_OMC_CODE}" ]; then
+		set_installprop "rom.exist.omc.code" "${INSTALLED_OMC_CODE}"
+	else
+		set_installprop "rom.exist.omc.code" "MISSING"
+	fi
+}
+
+restore_omc() {
+	cp -f /tmp/sales_code.dat /product/omc/sales_code.dat
+}
+
+restore_omc_check() {
+	INSTALLED_OMC_CODE=$(cat /tmp/sales_code.dat | tr -d '\n')
+	if [ -d "/product/omc/${INSTALLED_OMC_CODE}" ]; then
+		set_installprop "rom.exist.omc.support" "true"
+	else
+		if [ -d "/product/omc/single/${INSTALLED_OMC_CODE}" ]; then
+			set_installprop "rom.exist.omc.support" "true"
+		else
+			set_installprop "rom.exist.omc.support" "false"
+		fi	
+	fi
+}
+
+backup_addons() {
+	mkdir -p /data/addons_backup
+	cp -rf --parents --preserve=mode,ownership,timestamps,context ${INSTALLED_ADDONS_FULL} "${BACKUP_ADDONS_FOLDER}/"
+	cp -rf --parents --preserve=mode,ownership,timestamps,context ${ADDONS} "${BACKUP_ADDONS_FOLDER}/"
+}
+
+restore_addons() {
+	if [ "${SYSMOUNT}" == "/system_root" ]; then
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/system_root" /
+	else
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/system" /
+	fi
+}
+
+backup_addons_space() {
+	# Check if there is enough space to backup addons
+	BACKUP_SIZE=$(du -cs "${INSTALLED_ADDONS_FULL}" | cut -f1 | tail -1)
+	DATA_SIZE=$(df /data | tail -1 | awk '{print $4}')
+
+	if (( "${BACKUP_SIZE}" >= "${DATA_SIZE}" )); then
+		set_installprop "install.addons.backup" "nospace"
+	else
+		set_installprop "install.addons.backup" "true"
+	fi
+}
+
+uninstall_addon() {
+	# Uninstall addon when requested
+	rm -rf ${ADDON_FILES}
+	rm -f "${ADDON_INSTALLED_PROP}"
+	rm -f "${ADDON_INSTALLED_LIST}"
+}
+
+install_addon() {
+  if [ ! -d "${ADDONS}" ]; then
+	mkdir -p "${ADDONS}"
+  fi
+
+  if [ ! -d "${ADDONS}/files-list" ]; then
+	mkdir -p "${ADDONS}/files-list"
+  fi
+
+  cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
+  cp -f "${ADDON_LIST}" "${ADDON_INSTALLED_LIST}"
+}
+
+upgrade_addon() {
+	uninstall_addon
+	install_addon
+}
+
+addon_check() {
+	# Check if there is a currently-installed version of the addon, then uninstall or update it.
+	if [ -e "${ADDON_INSTALLED_PROP}" ]; then
+		# Make script robust. Check if the list is there, if there isn't, do install.
+		if [ -e "${ADDON_INSTALLED_LIST}" ]; then
+			if (( "${ADDON_BUILD}" <= "${ADDON_INSTALLED_BUILD}" )); then
+				set_installprop "addon.installed" "true" # Uninstall addon if ZIP is older or the same
+			else
+				set_installprop "addon.installed" "upgrade" # Upgrade addon if it's newer
+			fi
+		else
+			set_installprop "addon.installed" "false"
+		fi
+	else
+		set_installprop "addon.installed" "false"
+	fi
+}
+
+mghide_check() {
+  # Disable MagiskHideProps so system can dexopt
+  if [ -d "/data/adb/modules/MagiskHidePropsConf" ]; then
+	if [ -e "/data/adb/modules/MagiskHidePropsConf/disable" ]; then
+	    set_installprop "rom.exist.mghide" "false"
+	else
+	    set_installprop "rom.exist.mghide" "true"
+	    touch /data/adb/modules/MagiskHidePropsConf/disable
+	fi
+  else
+  	set_installprop "rom.exist.mghide" "false"
+  fi
+}
+
+mounts_checker() {
+	# Check for recovery mounting points
+	# Adapted from CRB check-mount binary
+	# Extended by tensevntysevn
+
+	# Since mount checker always runs first on script, delete older install props
+	# so we don't skew the script
+	rm -f "${PROP}"
+
+	block_test1=$(echo /dev/block/*/by-name | grep -v "\*")
+	block_test2=$(echo /dev/block/*/*/by-name | grep -v "\*")
+	block_test3=$(echo /dev/block/*/*/*/by-name | grep -v "\*")
+
+	if [ "$block_test1" ]; then
+		xblock=$block_test1
+	elif [ "$block_test2" ]; then
+		xblock=$block_test2
+	elif [ "$block_test3" ]; then
+		xblock=$block_test3
+	else
+		exit
+	fi
+
+	SLOT=""
+	for line in $(cat /proc/cmdline); do
+		if [ "$(echo $line | grep androidboot.slot_suffix)" ]; then
+			SLOT=$(echo $line | cut -d"=" -f2)
+		elif [ "$(echo $line | grep androidboot.slot)" ]; then
+			SLOT=_$(echo $line | cut -d"=" -f2)
+		fi
+	done
+
+	for item in SYSTEM system APP app system_a system_b; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.system" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	if [ -d /system_root ]; then
+		set_installprop "block.system.mount" "/system_root"
+	else
+		set_installprop "block.system.mount" "/system"
+	fi
+
+	for item in VENDOR vendor VNR vendor_a vendor_b; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.vendor" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	for item in PRODUCT product PRD product_a product_b; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.product" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	for item in ODM odm odm_a odm_b; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.odm" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	for item in boot boot_a boot_b BOOT Boot kernel kernel_a kernel_b KERNEL Kernel LNX ramdisk ramdisk_a ramdisk_b RAMDISK Ramdisk; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.boot" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	# extensions by tenseventy7 - 20201224
+	for item in recovery recovery_a recovery_b RECOVERY Recovery recovery_ramdisk RECOVERY_RAMDISK; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="$dirnamex/$basenamex"
+			set_installprop "block.recovery" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+
+	for item in up_param UP_PARAM Up_param Up_Param; do
+		full_block="$xblock/$item"
+		test_item=$(readlink $full_block)
+		if [ "$test_item" ]; then
+			basenamex=$(basename $full_block | cut -d"_" -f1)
+			dirnamex=$(dirname $full_block)
+			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
+			full_blockx="${dirnamex}/up_param"
+			set_installprop "block.splash" "${full_blockx}${SLOT}"
+			break
+		fi
+	done
+}
+
+data_check() {
+	# Check if there is existing data. We need this so we can do smart choices
+	# on whether we can overwrite OMC or not since it causes bootloops on some cases
+
+	if [ -d "/data/system" -o -d "/data/data" -o -d "/data/user" ]; then
+		set_installprop "rom.exist.data" "true"
+	else
+		set_installprop "rom.exist.data" "false"
+	fi
+}
+
+frsh_check() {
+	# Check if there is an exiting FreshROM install.
+	if [ -e "${ROM}" ]; then
+		set_installprop "rom.exist.system" "true"
+	else
+		set_installprop "rom.exist.system" "false"
+	fi
+}
+
+version_check() {
+	# Check for an existing ROM installation
+	if [ -e "${ROM}" ]; then
+
+		# Check for the version installed in the system
+		EXISTING=$(grep 'ro.ota.version=' "${ROM}" | sed 's/^ro.ota.version=//')
+		FLASHER=$(grep 'ro.ota.version=' "${FLASH}" | sed 's/^ro.ota.version=//')
+		set_installprop "rom.exist.version" "${EXISTING}"
+
+		if (( "${EXISTING}" > "${FLASHER}" )); then
+			set_installprop "rom.exist.system" "downgrade"
+		else
+			set_installprop "rom.exist.system" "true"
+		fi
+
+		# Check if there are addons installed and try backing them up
+		if [ -d "${ADDONS}" ]; then
+			set_installprop "rom.exist.addons" "true"
+		else
+			set_installprop "rom.exist.addons" "false"
+			set_installprop "install.addons.backup" "false"
+		fi
+	else
+		set_installprop "rom.exist.system" "false"
+	fi
+}
+
+install_cleanup() {
+	# Cleanup
+	if [ -d "${BACKUP_ADDONS_FOLDER}" ]; then
+		rm -rf "${BACKUP_ADDONS_FOLDER}"
+	fi
+
+	if [ -d "${BACKUP_OMC_FOLDER}" ]; then
+		rm -rf "${BACKUP_OMC_FOLDER}"
+	fi
+
+	if [ -d '/data/frsh_install' ]; then
+		rm -rf '/data/frsh_install'
+	fi
+}
+
+# Execute the function given by updater-script
+if [ ! -z "${EXEC}" ]; then
+	${EXEC}
+else
+	sleep 1	# Sleep then fail
+	exit 1
+fi

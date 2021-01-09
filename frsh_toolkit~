@@ -6,7 +6,7 @@
 # |_| |_| \___/__/_||_|_|_/ ___/|_|  |_/__/
 #                                          
 # =========================================
-# FreshROMs install toolkit - build 20210105
+# FreshROMs install toolkit - build 20210109
 # A toolkit used for addon and ROM installation
 # (C) 2019-2021 John Vincent - TenSeventy7@XDA
 
@@ -116,8 +116,12 @@ backup_addons() {
 restore_addons() {
 	if [ "${SYSMOUNT}" == "/system_root" ]; then
 		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/system_root" /
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/vendor" /
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/product" /
 	else
 		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/system" /
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/vendor" /
+		cp -rf --preserve=mode,ownership,timestamps,context "${BACKUP_ADDONS_FOLDER}/product" /
 	fi
 }
 

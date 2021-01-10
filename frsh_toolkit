@@ -168,7 +168,13 @@ addon_check() {
 		# Make script robust. Check if the list is there, if there isn't, do install.
 		if [ -e "${ADDON_INSTALLED_LIST}" ]; then
 			if (( "${ADDON_BUILD}" <= "${ADDON_INSTALLED_BUILD}" )); then
-				set_installprop "addon.installed" "true" # Uninstall addon if ZIP is older or the same
+				# Determine if the addon is not-uninstallable then notify user for it.
+				NO_UNINSTALL=$(grep 'fresh.addon.no-uninstall=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.no-uninstall=//')
+				if [ "${NO_UNINSTALL}" == "true" ]; then
+					set_installprop "addon.installed" "no-uninstall"
+				else
+					set_installprop "addon.installed" "true" # Uninstall addon if ZIP is older or the same
+				fi
 			else
 				set_installprop "addon.installed" "upgrade" # Upgrade addon if it's newer
 			fi

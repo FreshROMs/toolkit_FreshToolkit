@@ -21,11 +21,11 @@ SYSMOUNT=$(grep 'block.system.mount=' "${PROP}" | sed 's/^block.system.mount=//'
 if [ "${SYSMOUNT}" == "/system_root" ]; then
 	ROM='/system_root/system/etc/fresh.prop' # system prop file used for version checking
 	ADDONS="/system_root/system/etc/fresh/addons" # addon metadata folder used in the ROM
-	INSTALLED_ADDONS_FULL=$(awk '{print}' "${ADDONS}/files-list/*.txt" | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
+	INSTALLED_ADDONS_FULL=$(cat ${ADDONS}/files-list/*.txt | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
 else
 	ROM='/system/etc/fresh.prop' # system prop file used for version checking
 	ADDONS="/system/etc/fresh/addons" # addon metadata folder used in the ROM
-	INSTALLED_ADDONS_FULL=$(awk '{print}' "${ADDONS}/files-list/*.txt" | tr '\n' ' ')
+	INSTALLED_ADDONS_FULL=$(cat ${ADDONS}/files-list/*.txt | tr '\n' ' ')
 fi
 
 # Variables used by the addon and OMC backup services

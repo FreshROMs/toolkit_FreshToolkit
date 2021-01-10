@@ -108,7 +108,7 @@ restore_omc_check() {
 }
 
 backup_addons() {
-	mkdir -p /data/addons_backup
+	mkdir -p ${BACKUP_ADDONS_FOLDER}
 	cp -rf --parents --preserve=mode,ownership,timestamps,context ${INSTALLED_ADDONS_FULL} "${BACKUP_ADDONS_FOLDER}/"
 	cp -rf --parents --preserve=mode,ownership,timestamps,context ${ADDONS} "${BACKUP_ADDONS_FOLDER}/"
 }

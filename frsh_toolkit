@@ -38,12 +38,20 @@ BACKUP_OMC_FOLDER='/data/frsh_install/omc_backup'
 
 # Variables used by addon installer
 ADDON_PROP='/tmp/addon.prop'
-ADDON_LIST='/tmp/files-list.txt'
 ADDON_CODE=$(grep 'fresh.addon.code=' "${ADDON_PROP}" | sed 's/^fresh.addon.code=//')
 ADDON_BUILD=$(grep 'fresh.addon.version=' "${ADDON_PROP}" | sed 's/^fresh.addon.version=//')
 ADDON_INSTALLED_PROP="${ADDONS}/${ADDON_CODE}.prop"
 ADDON_INSTALLED_LIST="${ADDONS}/files-list/${ADDON_CODE}.txt"
 ADDON_INSTALLED_BUILD=$(grep 'fresh.addon.version=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.version=//')
+
+if [ -d "/data/frsh_addon_install" ]; then
+	ADDON_FILES_SYSTEM=$(echo ${BUSYBOX} find "/data/frsh_addon_install/system" | sed 's@^/data/frsh_addon_install@@')
+	ADDON_FILES_VENDOR=$(echo ${BUSYBOX} find "/data/frsh_addon_install/product" | sed 's@^/data/frsh_addon_install@@')
+	ADDON_FILES_PRODUCT=$(echo ${BUSYBOX} find "/data/frsh_addon_install/vendor" | sed 's@^/data/frsh_addon_install@@')
+	ADDON_FILES_SYSTEM_CHECK=$(echo ${BUSYBOX} find "/data/frsh_addon_install/system")
+	ADDON_FILES_VENDOR_CHECK=$(echo ${BUSYBOX} find "/data/frsh_addon_install/product")
+	ADDON_FILES_PRODUCT_CHECK=$(echo ${BUSYBOX} find "/data/frsh_addon_install/vendor")
+fi
 
 # Addon variables that depend on system-as-root (SaR)
 if [ "${SYSMOUNT}" == "/system_root" ]; then
@@ -146,16 +154,110 @@ uninstall_addon() {
 }
 
 install_addon() {
-  if [ ! -d "${ADDONS}" ]; then
-	mkdir -p "${ADDONS}"
-  fi
+	if [ ! -d "${ADDONS}" ]; then
+		mkdir -p "${ADDONS}"
+	fi
 
-  if [ ! -d "${ADDONS}/files-list" ]; then
-	mkdir -p "${ADDONS}/files-list"
-  fi
+	if [ ! -d "${ADDONS}/files-list" ]; then
+		mkdir -p "${ADDONS}/files-list"
+	fi
 
-  cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
-  cp -f "${ADDON_LIST}" "${ADDON_INSTALLED_LIST}"
+	${BUSYBOX} chcon u:object_r:system_lib_file:s0 /data/frsh_addon_install/system/lib/*.so
+	${BUSYBOX} chcon u:object_r:system_lib_file:s0 /data/frsh_addon_install/system/lib64/*.so
+	${BUSYBOX} chcon u:object_r:vendor_file:s0 /data/frsh_addon_install/vendor/lib/*.so
+	${BUSYBOX} chcon u:object_r:vendor_file:s0 /data/frsh_addon_install/vendor/lib64/*.so
+
+	if [ "${SYSMOUNT}" == "/system_root" ]; then
+		cp -rf "/data/frsh_addon_install/system" /system_root/
+		cp -rfp "/data/frsh_addon_install/system/lib" /system_root/system/
+		cp -rfp "/data/frsh_addon_install/system/lib64" /system_root/system/
+	else
+		cp -rf "/data/frsh_addon_install/system" /
+		cp -rfp "/data/frsh_addon_install/system/lib" /system/
+		cp -rfp "/data/frsh_addon_install/system/lib64" /system/
+	fi
+
+	cp -rf "/data/frsh_addon_install/vendor" /
+	cp -rfp "/data/frsh_addon_install/vendor/lib" /vendor/
+	cp -rfp "/data/frsh_addon_install/vendor/lib64" /vendor/
+	cp -rf "/data/frsh_addon_install/product" /
+	touch "${ADDON_INSTALLED_LIST}"
+
+	if [ $(ls -1 ${ADDON_FILES_SYSTEM} 2>/dev/null | wc -l) -gt 0 ];
+	then
+	    echo ${ADDON_FILES_SYSTEM} > "${ADDON_INSTALLED_LIST}"
+	    LEVEL=0
+	else
+	    LEVEL=2
+	fi
+	
+	if [ $(ls -1 ${ADDON_FILES_VENDOR} 2>/dev/null | wc -l) -gt 0 ];
+	then
+	    echo ${ADDON_FILES_VENDOR} >> "${ADDON_INSTALLED_LIST}"
+	    LEVEL=$((${LEVEL} + 0))
+	else
+	    LEVEL=$((${LEVEL} + 3))
+	fi
+	
+	if [ $(ls -1 ${ADDON_FILES_PRODUCT} 2>/dev/null | wc -l) -gt 0 ];
+	then
+	    echo ${ADDON_FILES_PRODUCT} >> "${ADDON_INSTALLED_LIST}"
+	    LEVEL=$((${LEVEL} + 0))
+	else
+	    LEVEL=$((${LEVEL} + 5))
+	fi
+
+	set_installprop "install.check" "${LEVEL}"
+	cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
+}
+
+install_addon_check() {
+	# Check if there is enough system, vendor, and product space to install addon
+	SYSTEM_ADDON=$(du -cs "${ADDON_FILES_SYSTEM_CHECK}" | cut -f1 | tail -1)
+	VENDOR_ADDON=$(du -cs "${ADDON_FILES_VENDOR_CHECK}" | cut -f1 | tail -1)
+	PRODUCT_ADDON=$(du -cs "${ADDON_FILES_PRODUCT_CHECK}" | cut -f1 | tail -1)
+
+	SYSTEM_SIZE=$(df ${SYSMOUNT} | tail -1 | awk '{print $4}')
+	VENDOR_SIZE=$(df /vendor | tail -1 | awk '{print $4}')
+	PRODUCT_SIZE=$(df /product | tail -1 | awk '{print $4}')
+
+	set_installprop "debug.system.system-size" "${SYSTEM_SIZE}"
+	set_installprop "debug.system.vendor-size" "${VENDOR_SIZE}"
+	set_installprop "debug.system.product-size" "${PRODUCT_SIZE}"
+	set_installprop "debug.addon.system-size" "${SYSTEM_ADDON}"
+	set_installprop "debug.addon.vendor-size" "${VENDOR_ADDON}"
+	set_installprop "debug.addon.product-size" "${PRODUCT_ADDON}"
+
+	if (( "${SYSTEM_ADDON}" >= "${SYSTEM_SIZE}" )); then
+		set_installprop "install.addon.system" "nospace"
+	else
+		set_installprop "install.addon.system" "true"
+	fi
+
+	if (( "${VENDOR_SIZE}" >= "${VENDOR_ADDON}" )); then
+		set_installprop "install.addon.vendor" "nospace"
+	else
+		set_installprop "install.addon.vendor" "true"
+	fi
+
+	if (( "${PRODUCT_SIZE}" >= "${PRODUCT_ADDON}" )); then
+		set_installprop "install.addon.vendor" "nospace"
+	else
+		set_installprop "install.addon.vendor" "true"
+	fi
+}
+
+install_addon_data_check() {
+	# Check if there is enough data space to install addon
+	STANDARD_SIZE='1073741824' # 1GB
+	DATA_SIZE=$(df /data | tail -1 | awk '{print $4}')
+
+	if (( "${STANDARD_SIZE}" >= "${DATA_SIZE}" )); then
+		set_installprop "install.addon" "nospace"
+	else
+		set_installprop "install.addon" "true"
+		mkdir -p "/data/frsh_addon_install"
+	fi
 }
 
 upgrade_addon() {
@@ -350,6 +452,10 @@ install_cleanup() {
 	fi
 
 	if [ -d '/data/frsh_install' ]; then
+		rm -rf '/data/frsh_install'
+	fi
+
+	if [ -d '/data/frsh_addon_install' ]; then
 		rm -rf '/data/frsh_install'
 	fi
 }

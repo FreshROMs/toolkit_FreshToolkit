@@ -161,53 +161,12 @@ install_addon() {
 	if [ ! -d "${ADDONS}/files-list" ]; then
 		mkdir -p "${ADDONS}/files-list"
 	fi
-
-	${BUSYBOX} chcon u:object_r:system_lib_file:s0 /data/frsh_addon_install/system/lib/*.so
-	${BUSYBOX} chcon u:object_r:system_lib_file:s0 /data/frsh_addon_install/system/lib64/*.so
-	${BUSYBOX} chcon u:object_r:vendor_file:s0 /data/frsh_addon_install/vendor/lib/*.so
-	${BUSYBOX} chcon u:object_r:vendor_file:s0 /data/frsh_addon_install/vendor/lib64/*.so
-
-	if [ "${SYSMOUNT}" == "/system_root" ]; then
-		cp -rf "/data/frsh_addon_install/system" /system_root/
-		cp -rfp "/data/frsh_addon_install/system/lib" /system_root/system/
-		cp -rfp "/data/frsh_addon_install/system/lib64" /system_root/system/
-	else
-		cp -rf "/data/frsh_addon_install/system" /
-		cp -rfp "/data/frsh_addon_install/system/lib" /system/
-		cp -rfp "/data/frsh_addon_install/system/lib64" /system/
-	fi
-
-	cp -rf "/data/frsh_addon_install/vendor" /
-	cp -rfp "/data/frsh_addon_install/vendor/lib" /vendor/
-	cp -rfp "/data/frsh_addon_install/vendor/lib64" /vendor/
-	cp -rf "/data/frsh_addon_install/product" /
+	
 	touch "${ADDON_INSTALLED_LIST}"
 
-	if [ $(ls -1 ${ADDON_FILES_SYSTEM} 2>/dev/null | wc -l) -gt 0 ];
-	then
-	    echo ${ADDON_FILES_SYSTEM} > "${ADDON_INSTALLED_LIST}"
-	    LEVEL=0
-	else
-	    LEVEL=2
-	fi
-	
-	if [ $(ls -1 ${ADDON_FILES_VENDOR} 2>/dev/null | wc -l) -gt 0 ];
-	then
-	    echo ${ADDON_FILES_VENDOR} >> "${ADDON_INSTALLED_LIST}"
-	    LEVEL=$((${LEVEL} + 0))
-	else
-	    LEVEL=$((${LEVEL} + 3))
-	fi
-	
-	if [ $(ls -1 ${ADDON_FILES_PRODUCT} 2>/dev/null | wc -l) -gt 0 ];
-	then
-	    echo ${ADDON_FILES_PRODUCT} >> "${ADDON_INSTALLED_LIST}"
-	    LEVEL=$((${LEVEL} + 0))
-	else
-	    LEVEL=$((${LEVEL} + 5))
-	fi
-
-	set_installprop "install.check" "${LEVEL}"
+	echo ${ADDON_FILES_SYSTEM} > "${ADDON_INSTALLED_LIST}"
+	echo ${ADDON_FILES_VENDOR} >> "${ADDON_INSTALLED_LIST}"
+	echo ${ADDON_FILES_PRODUCT} >> "${ADDON_INSTALLED_LIST}"
 	cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
 }
 

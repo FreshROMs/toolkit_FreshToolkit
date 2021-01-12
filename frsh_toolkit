@@ -68,7 +68,7 @@ backup_omc_full() {
 }
 
 restore_omc_full() {
-	cp -rfn --preserve=mode,ownership,timestamps,context "${BACKUP_OMC_FOLDER}/product/omc" "/product/"
+	cp -rn --preserve=mode,ownership,timestamps,context "${BACKUP_OMC_FOLDER}/product/omc" "/product/"
 }
 
 restore_omc_withdata() {

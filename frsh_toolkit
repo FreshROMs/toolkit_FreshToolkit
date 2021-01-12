@@ -296,7 +296,7 @@ data_check() {
 	# Check if there is existing data. We need this so we can do smart choices
 	# on whether we can overwrite OMC or not since it causes bootloops on some cases
 
-	if [ -d "/data/system" -o -d "/data/data" -o -d "/data/user" ]; then
+	if [ -d "/data/resource-cache" -o -d "/data/overlays" -o -d "/data/data" -o -d "/data/user" ]; then
 		set_installprop "rom.exist.data" "true"
 	else
 		set_installprop "rom.exist.data" "false"

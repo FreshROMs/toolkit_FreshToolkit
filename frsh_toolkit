@@ -202,134 +202,94 @@ mghide_check() {
 }
 
 mounts_checker() {
-	# Check for recovery mounting points
-	# Adapted from CRB check-mount binary
-	# Extended by tensevntysevn
+	# Check for device mounting points.
+	# Based on SuperR@XDA's configure.sh
+	# Extended by TenSeventy7
 
 	# Since mount checker always runs first on script, delete older install props
 	# so we don't skew the script
 	rm -f "${PROP}"
 
-	block_test1=$(echo /dev/block/*/by-name | grep -v "\*")
-	block_test2=$(echo /dev/block/*/*/by-name | grep -v "\*")
-	block_test3=$(echo /dev/block/*/*/*/by-name | grep -v "\*")
-
-	if [ "$block_test1" ]; then
-		xblock=$block_test1
-	elif [ "$block_test2" ]; then
-		xblock=$block_test2
-	elif [ "$block_test3" ]; then
-		xblock=$block_test3
-	else
-		exit
+	# Get boot slot if it exists
+	BOOT_SLOT=$(getprop ro.boot.slot_suffix)
+	if [ -z ${BOOT_SLOT} ]; then
+		BOOT_SLOT=_$(getprop ro.boot.slot)
+		if [ "${BOOT_SLOT}" = "_" ]; then
+			BOOT_SLOT=
+		fi
+	fi
+	if [ -z ${BOOT_SLOT} ]; then
+		BOOT_SLOT=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep slot | grep -v simslot | cut -d'=' -f2)
+	fi
+	if [ -n ${BOOT_SLOT} ]; then
+		if [ "${BOOT_SLOT}" = "_a" ] || [ "${BOOT_SLOT}" = "_b" ]; then
+			set_installprop "boot.slot" "${BOOT_SLOT}"
+		else
+			BOOT_SLOT=
+		fi
 	fi
 
-	SLOT=""
-	for line in $(cat /proc/cmdline); do
-		if [ "$(echo $line | grep androidboot.slot_suffix)" ]; then
-			SLOT=$(echo $line | cut -d"=" -f2)
-		elif [ "$(echo $line | grep androidboot.slot)" ]; then
-			SLOT=_$(echo $line | cut -d"=" -f2)
-		fi
-	done
+	# Get system partition and by-name paths
+	SYSTEMBLOCK=$(find /dev/block | grep -i "system${BOOT_SLOT}" | head -n 1)
+	if [ -z ${SYSTEMBLOCK} ]; then
+		for PARTITION in /etc/*fstab*; do
+			SYSTEMBLOCK=$(grep -v '#' ${PARTITION} | grep -E '/system[^a-zA-Z]' | grep -v system_image | grep -v mmcblk | grep -oE '/dev/[a-zA-Z0-9_./-]*')
+			if [ -n ${SYSTEMBLOCK} ]; then
+				break
+			fi
+		done
+	fi
 
-	for item in SYSTEM system APP app system_a system_b; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.system" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
+	if [ -n ${SYSTEMBLOCK} ] && [ $(readlink -f "${SYSTEMBLOCK}") ]; then
+		PART_PATH=$(dirname "${SYSTEMBLOCK}")
+		set_installprop "boot.part.by-name" "${PART_PATH}"
+	else
+		set_installprop "boot.part.by-name" "fail"
+		exit 1
+	fi
 
+	# Check for System-as-Root (SaR) mount point
 	if [ -d /system_root ]; then
 		set_installprop "block.system.mount" "/system_root"
 	else
 		set_installprop "block.system.mount" "/system"
 	fi
 
-	for item in VENDOR vendor VNR vendor_a vendor_b; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.vendor" "${full_blockx}${SLOT}"
+	# Add verified partitions to installer prop
+	for PARTITION in system SYSTEM APP; do
+		if [ $(readlink "${PART_PATH}/${PARTITION}${BOOT_SLOT}") ]; then
+			set_installprop "block.system" "${PART_PATH}/${PARTITION}${BOOT_SLOT}"
 			break
+		fi
+	done
+	for PARTITION in vendor VENDOR VNR; do
+		if [ $(readlink "${PART_PATH}/${PARTITION}${BOOT_SLOT}") ]; then
+			set_installprop "block.vendor" "${PART_PATH}/${PARTITION}${BOOT_SLOT}"
+			break
+		fi
+	done
+	for PARTITION in userdata USERDATA UDA; do
+		if [ $(readlink "${PART_PATH}/${PARTITION}${BOOT_SLOT}") ]; then
+			set_installprop "block.data" "${PART_PATH}/${PARTITION}${BOOT_SLOT}"
+			break
+		fi
+	done
+	for PARTITION in boot BOOT LNX; do
+		if [ $(readlink "${PART_PATH}/${PARTITION}${BOOT_SLOT}") ]; then
+			set_installprop "block.boot" "${PART_PATH}/${PARTITION}${BOOT_SLOT}"
+			break
+		fi
+	done
+	for PARTITION in version product optics prism cust oem odm ODM recovery RECOVERY ramdisk RAMDISK kernel KERNEL Kernel; do
+		if [ $(readlink "${PART_PATH}/${PARTITION}${BOOT_SLOT}") ]; then
+			set_installprop "block.$(echo "${PARTITION}" | tr '[A-Z]' '[a-z]')" "${PART_PATH}/${PARTITION}${BOOT_SLOT}"
 		fi
 	done
 
-	for item in PRODUCT product PRD product_a product_b; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.product" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
-
-	for item in ODM odm odm_a odm_b; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.odm" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
-
-	for item in boot boot_a boot_b BOOT Boot kernel kernel_a kernel_b KERNEL Kernel LNX ramdisk ramdisk_a ramdisk_b RAMDISK Ramdisk; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.boot" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
-
-	# extensions by tenseventy7 - 20201224
-	for item in recovery recovery_a recovery_b RECOVERY Recovery recovery_ramdisk RECOVERY_RAMDISK; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="$dirnamex/$basenamex"
-			set_installprop "block.recovery" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
-
-	for item in up_param UP_PARAM Up_param Up_Param; do
-		full_block="$xblock/$item"
-		test_item=$(readlink $full_block)
-		if [ "$test_item" ]; then
-			basenamex=$(basename $full_block | cut -d"_" -f1)
-			dirnamex=$(dirname $full_block)
-			if [ ! "$(basename $full_block | grep "_")" ]; then SLOT=""; fi
-			full_blockx="${dirnamex}/up_param"
-			set_installprop "block.splash" "${full_blockx}${SLOT}"
-			break
-		fi
-	done
+	# Add additional up_param detection
+	if [ $(readlink "${PART_PATH}/up_param${BOOT_SLOT}") ]; then
+			set_installprop "block.splash" "${PART_PATH}/up_param${BOOT_SLOT}"
+	fi
 }
 
 data_check() {

@@ -39,10 +39,13 @@ BACKUP_OMC_FOLDER='/data/frsh_install/omc_backup'
 # Variables used by addon installer
 ADDON_PROP='/tmp/addon.prop'
 ADDON_LIST='/tmp/files-list.txt'
+ADDON_SYSPROP='/tmp/system.prop'
 ADDON_CODE=$(grep 'fresh.addon.code=' "${ADDON_PROP}" | sed 's/^fresh.addon.code=//')
 ADDON_BUILD=$(grep 'fresh.addon.version=' "${ADDON_PROP}" | sed 's/^fresh.addon.version=//')
 ADDON_INSTALLED_PROP="${ADDONS}/${ADDON_CODE}.prop"
 ADDON_INSTALLED_LIST="${ADDONS}/files-list/${ADDON_CODE}.txt"
+ADDON_INSTALLED_SYSPROP_LIST="${ADDONS}/system.prop"
+ADDON_INSTALLED_SYSPROP="${ADDONS}/files-list/props/${ADDON_CODE}.prop"
 ADDON_INSTALLED_BUILD=$(grep 'fresh.addon.version=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.version=//')
 
 # Addon variables that depend on system-as-root (SaR)
@@ -112,6 +115,17 @@ backup_addons() {
 	mkdir -p ${BACKUP_ADDONS_FOLDER}
 	${BUSYBOX} cp -rfp --parents ${INSTALLED_ADDONS_FULL} "${BACKUP_ADDONS_FOLDER}/"
 	${BUSYBOX} cp -rfp --parents ${ADDONS} "${BACKUP_ADDONS_FOLDER}/"
+
+	# BUG: Framework and Optimization tests has framework.jar in file-list. Delete that from backup.
+	if [ "${SYSMOUNT}" == "/system_root" ]; then
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system_root/system/framework/framework.jar"
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system_root/system/framework/arm"
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system_root/system/framework/arm64"
+	else
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system/framework/framework.jar"
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system/framework/arm"
+		${BUSYBOX} rm -rf "${BACKUP_ADDONS_FOLDER}/system/framework/arm64"
+	fi
 }
 
 restore_addons() {
@@ -143,6 +157,12 @@ uninstall_addon() {
 	rm -rf ${ADDON_FILES}
 	rm -f "${ADDON_INSTALLED_PROP}"
 	rm -f "${ADDON_INSTALLED_LIST}"
+
+  	if [ -e "${ADDON_INSTALLED_SYSPROP}" ]
+	  rm -f "${ADDON_INSTALLED_SYSPROP}"
+	  NEW_PROP=$(awk '{print}' "${ADDON_INSTALLED_SYSPROP_LIST}" | sed "s@"import /system/etc/fresh/addons/props/${ADDON_CODE} \*"@''@g")
+	  echo "${NEW_PROP}" > "${ADDON_INSTALLED_SYSPROP_LIST}"
+  	fi
 }
 
 install_addon() {
@@ -156,6 +176,17 @@ install_addon() {
 
   cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
   cp -f "${ADDON_LIST}" "${ADDON_INSTALLED_LIST}"
+
+  # Feb2021: Add system.prop feature
+  if [ -e "${ADDON_SYSPROP}" ]
+	  if [ ! -d "${ADDONS}/props" ]; then
+		mkdir -p "${ADDONS}/props"
+	  fi
+
+	  cp -f "${ADDON_SYSPROP}" "${ADDON_INSTALLED_SYSPROP}"
+	  ${BUSYBOX} echo "import /system/etc/fresh/addons/props/${ADDON_CODE} *" > "${ADDON_INSTALLED_SYSPROP_LIST}"
+	  ${BUSYBOX} echo " " > "${ADDON_INSTALLED_SYSPROP_LIST}"
+  fi
 }
 
 upgrade_addon() {

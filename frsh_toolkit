@@ -15,7 +15,7 @@ EXEC=$1 # function to execute for updater-script. DO NOT EDIT.
 BUSYBOX='/tmp/scripts/busybox' # the location of the busybox binary.
 PROP="/tmp/frsh_install.prop" # prop file used to counter-check values for the script
 FLASH='/tmp/fresh.prop' # ROM prop file used for version checking
-DEVICE=$(grep 'ro.fresh.device=' /tmp/fresh_device.prop | sed 's/^ro.fresh.device=//') # device-checking prop
+DEVICE=$(grep 'ro.product.system.name=' /tmp/build_fresh.prop | sed 's/^ro.product.system.name=//') # device-checking prop
 SYSMOUNT=$(grep 'block.system.mount=' "${PROP}" | sed 's/^block.system.mount=//') # check if the system is mounted as SaR
 
 # Variables that depend on system-as-root (SaR)

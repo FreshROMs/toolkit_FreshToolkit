@@ -6,7 +6,7 @@
 # |_| |_| \___/__/_||_|_|_/ ___/|_|  |_/__/
 #                                          
 # =========================================
-# FreshROMs install toolkit - build 20210116
+# FreshROMs install toolkit - build 20210424
 # A toolkit used for addon and ROM installation
 # (C) 2019-2021 John Vincent - TenSeventy7@XDA
 
@@ -15,16 +15,16 @@ EXEC=$1 # function to execute for updater-script. DO NOT EDIT.
 BUSYBOX='/tmp/scripts/busybox' # the location of the busybox binary.
 PROP="/tmp/frsh_install.prop" # prop file used to counter-check values for the script
 FLASH='/tmp/fresh.prop' # ROM prop file used for version checking
-DEVICE=$(grep 'ro.product.system.name=' /tmp/build_fresh.prop | sed 's/^ro.product.system.name=//') # device-checking prop
+DEVICE=$(grep 'ro.product.vendor.name=' /tmp/vendor.prop | sed 's/^ro.product.vendor.name=//') # device-checking prop
 SYSMOUNT=$(grep 'block.system.mount=' "${PROP}" | sed 's/^block.system.mount=//') # check if the system is mounted as SaR
 
 # Variables that depend on system-as-root (SaR)
 if [ "${SYSMOUNT}" == "/system_root" ]; then
-	ROM='/system_root/system/etc/fresh.prop' # system prop file used for version checking
+	ROM='/system_root/system/fresh.prop' # system prop file used for version checking
 	ADDONS="/system_root/system/etc/fresh/addons" # addon metadata folder used in the ROM
 	INSTALLED_ADDONS_FULL=$(cat ${ADDONS}/files-list/*.txt | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
 else
-	ROM='/system/etc/fresh.prop' # system prop file used for version checking
+	ROM='/system/fresh.prop' # system prop file used for version checking
 	ADDONS="/system/etc/fresh/addons" # addon metadata folder used in the ROM
 	INSTALLED_ADDONS_FULL=$(cat ${ADDONS}/files-list/*.txt | tr '\n' ' ')
 fi
@@ -43,9 +43,11 @@ ADDON_SYSPROP='/tmp/system.prop'
 ADDON_CODE=$(grep 'fresh.addon.code=' "${ADDON_PROP}" | sed 's/^fresh.addon.code=//')
 ADDON_BUILD=$(grep 'fresh.addon.version=' "${ADDON_PROP}" | sed 's/^fresh.addon.version=//')
 ADDON_INSTALLED_PROP="${ADDONS}/${ADDON_CODE}.prop"
+ADDON_INSTALLED_META="${ADDONS}/${ADDON_CODE}.metadata"
+ADDON_INSTALLED_KEEP="${ADDONS}/${ADDON_CODE}.keep"
 ADDON_INSTALLED_LIST="${ADDONS}/files-list/${ADDON_CODE}.txt"
 ADDON_INSTALLED_SYSPROP_LIST="${ADDONS}/system.prop"
-ADDON_INSTALLED_SYSPROP="${ADDONS}/files-list/props/${ADDON_CODE}.prop"
+ADDON_INSTALLED_SYSPROP="${ADDONS}/props/${ADDON_CODE}.prop"
 ADDON_INSTALLED_BUILD=$(grep 'fresh.addon.version=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.version=//')
 
 # Addon variables that depend on system-as-root (SaR)
@@ -154,15 +156,30 @@ backup_addons_space() {
 
 uninstall_addon() {
 	# Uninstall addon when requested
-	rm -rf ${ADDON_FILES}
+
+	# Apr2021: Add .keep flag for Fresh Hub
+	NO_UNINSTALL_INSTALL=$(grep 'fresh.addon.no-uninstall=' "${ADDON_INSTALLED_PROP}" | sed 's/^fresh.addon.no-uninstall=//')
+	if [ ! "${NO_UNINSTALL_INSTALL}" == "true" ]; then
+ 		rm -rf ${ADDON_FILES}
+	fi
+	
 	rm -f "${ADDON_INSTALLED_PROP}"
 	rm -f "${ADDON_INSTALLED_LIST}"
+	rm -f "${ADDON_INSTALLED_META}"
 
-  	if [ -e "${ADDON_INSTALLED_SYSPROP}" ]
-	  rm -f "${ADDON_INSTALLED_SYSPROP}"
-	  NEW_PROP=$(awk '{print}' "${ADDON_INSTALLED_SYSPROP_LIST}" | sed "s@"import /system/etc/fresh/addons/props/${ADDON_CODE} \*"@''@g")
-	  echo "${NEW_PROP}" > "${ADDON_INSTALLED_SYSPROP_LIST}"
-  	fi
+	# Feb2021: Add system.prop feature
+	if [ -e "${ADDON_INSTALLED_SYSPROP}" ]; then
+		${BUSYBOX} comm -2 -3 ${ADDON_INSTALLED_SYSPROP_LIST} ${ADDON_INSTALLED_SYSPROP} > /tmp/system.prop
+		mv -f /tmp/system.prop ${ADDON_INSTALLED_SYSPROP_LIST}
+		rm -f "${ADDON_INSTALLED_SYSPROP}"
+		rm -f /tmp/system.prop
+	fi
+
+	if [ -e "${ADDON_SYSPROP}" ]; then
+		${BUSYBOX} comm -2 -3 ${ADDON_INSTALLED_SYSPROP_LIST} ${ADDON_SYSPROP} > /tmp/system.prop
+		mv -f /tmp/system.prop ${ADDON_INSTALLED_SYSPROP_LIST}
+		rm -f /tmp/system.prop
+	fi
 }
 
 install_addon() {
@@ -176,16 +193,22 @@ install_addon() {
 
   cp -f "${ADDON_PROP}" "${ADDON_INSTALLED_PROP}"
   cp -f "${ADDON_LIST}" "${ADDON_INSTALLED_LIST}"
+  echo "${ADDON_BUILD}" > "${ADDON_INSTALLED_META}"
+
+  # Apr2021: Add .keep flag for Fresh Hub
+  NO_UNINSTALL_INSTALL=$(grep 'fresh.addon.no-uninstall=' "${ADDON_PROP}" | sed 's/^fresh.addon.no-uninstall=//')
+  if [ "${NO_UNINSTALL_INSTALL}" == "true" ]; then
+  		echo "true" > "${ADDON_INSTALLED_KEEP}"
+  fi
 
   # Feb2021: Add system.prop feature
-  if [ -e "${ADDON_SYSPROP}" ]
+  if [ -e "${ADDON_SYSPROP}" ]; then
 	  if [ ! -d "${ADDONS}/props" ]; then
 		mkdir -p "${ADDONS}/props"
 	  fi
 
 	  cp -f "${ADDON_SYSPROP}" "${ADDON_INSTALLED_SYSPROP}"
-	  ${BUSYBOX} echo "import /system/etc/fresh/addons/props/${ADDON_CODE} *" > "${ADDON_INSTALLED_SYSPROP_LIST}"
-	  ${BUSYBOX} echo " " > "${ADDON_INSTALLED_SYSPROP_LIST}"
+	  ${BUSYBOX} echo "$(cat "${ADDON_INSTALLED_SYSPROP}")" >> "${ADDON_INSTALLED_SYSPROP_LIST}"
   fi
 }
 
@@ -216,6 +239,20 @@ addon_check() {
 	else
 		set_installprop "addon.installed" "false"
 	fi
+}
+
+fixprops_check() {
+  # Disable MagiskHideProps so system can dexopt
+  if [ -d "/data/adb/modules/fixprops" ]; then
+	if [ -e "/data/adb/modules/fixprops/disable" ]; then
+	    set_installprop "rom.exist.fix_prop" "false"
+	else
+	    set_installprop "rom.exist.fix_prop" "true"
+	    touch /data/adb/modules/fixprops/disable
+	fi
+  else
+  	set_installprop "rom.exist.fix_prop" "false"
+  fi
 }
 
 mghide_check() {
@@ -329,6 +366,14 @@ data_check() {
 
 	if [ -d "/data/resource-cache" -o -d "/data/overlays" -o -d "/data/data" -o -d "/data/user" ]; then
 		set_installprop "rom.exist.data" "true"
+
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@AODService_v50@AODService_v50.apk@classes.vdex"
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@AODService_v50@AODService_v50.apk@classes.dex"
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@AODService_v50@AODService_v50.apk@classes.art"
+		
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@SystemUI@SystemUI.apk@classes.vdex"
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@SystemUI@SystemUI.apk@classes.dex"
+		rm -f "/data/dalvik-cache/arm64/system@priv-app@SystemUI@SystemUI.apk@classes.art"
 	else
 		set_installprop "rom.exist.data" "false"
 	fi
@@ -383,6 +428,18 @@ install_cleanup() {
 	if [ -d '/data/frsh_install' ]; then
 		rm -rf '/data/frsh_install'
 	fi
+
+	if [ -e '/tmp/addon.prop' ]; then
+		rm -f '/tmp/addon.prop'
+		rm -f '/tmp/files-list.txt'
+	fi
+
+	if [ -e "${ADDON_SYSPROP}" ]; then
+		rm -f ${ADDON_SYSPROP}
+	fi
+
+	rm -f '/tmp/frsh_install.prop'
+	rm -rf '/tmp/scripts'
 }
 
 # Execute the function given by updater-script

@@ -181,8 +181,50 @@ restore_omc_check() {
 
 backup_addons() {
 	mkdir -p ${BACKUP_ADDONS_FOLDER}
-	${BUSYBOX} cp -rfp --parents ${INSTALLED_ADDONS_FULL} "${BACKUP_ADDONS_FOLDER}/"
+
+	for file in ${ADDONS}/files-list/*.txt; do
+		if [ "${SYSMOUNT}" == "/system_root" ]; then
+			ADDON_FILE_LIST=$(cat ${file} | sed -e 's@'/system'@'/system_root/system'@g' | tr '\n' ' ')
+		else
+			ADDON_FILE_LIST=$(cat ${file} | tr '\n' ' ')
+		fi
+
+		${BUSYBOX} cp -rfp --parents ${ADDON_FILE_LIST} "${BACKUP_ADDONS_FOLDER}/"
+	done
+
+	# Migrate Gplus addon move to /vendor
+	EXIST_VERSION=$(file_getprop "${PROP}" 'system.exist.version')
+	if (( "${EXIST_VERSION}" < "21070101" )); then
+	  if [ -d "${BACKUP_ADDONS_FOLDER}/system_root/system/app/Gmail2" ]; then
+			if [ "${SYSMOUNT}" == "/system_root" ]; then
+				${BUSYBOX} cp -rfp --parents "${BACKUP_ADDONS_FOLDER}/system_root/system/app/Gmail2" "${BACKUP_ADDONS_FOLDER}/vendor/app/"
+				${BUSYBOX} cp -rfp --parents "${BACKUP_ADDONS_FOLDER}/system_root/system/app/Maps" "${BACKUP_ADDONS_FOLDER}/vendor/app/"
+				rm -rf "${BACKUP_ADDONS_FOLDER}/system_root/system/app/Gmail2"
+				rm -rf "${BACKUP_ADDONS_FOLDER}/system_root/system/app/Maps"
+			else
+				${BUSYBOX} cp -rfp --parents "${BACKUP_ADDONS_FOLDER}/system/app/Gmail2" "${BACKUP_ADDONS_FOLDER}/vendor/app/"
+				${BUSYBOX} cp -rfp --parents "${BACKUP_ADDONS_FOLDER}/system/app/Maps" "${BACKUP_ADDONS_FOLDER}/vendor/app/"
+				rm -rf "${BACKUP_ADDONS_FOLDER}/system/app/Gmail2"
+				rm -rf "${BACKUP_ADDONS_FOLDER}/system/app/Maps"
+			fi
+			file_setprop "addon.google.installed" "true"
+		else
+			file_setprop "addon.google.installed" "false"
+	  fi
+	else
+		file_setprop "addon.google.installed" "false"
+	fi
+
 	${BUSYBOX} cp -rfp --parents ${ADDONS} "${BACKUP_ADDONS_FOLDER}/"
+}
+
+restore_floating_ota() {
+	for file in ${ADDONS}/floating/*.txt; do
+	  while IFS="" read -r p || [ -n "$p" ]; do
+	  	array=($p)
+		  set_floating_feature "${array[0]}" "${array[1]}"
+		done < "${file}"
+	done
 }
 
 restore_addons() {
@@ -196,26 +238,73 @@ restore_addons() {
 		${BUSYBOX} cp -rfp "${BACKUP_ADDONS_FOLDER}/product" /
 	fi
 
-	for file in ${ADDONS}/floating/*.txt; do
-	  while IFS="" read -r p || [ -n "$p" ]; do
-	  	array=($p)
-		  set_floating_feature "${array[0]}" "${array[1]}"
-		done < "${file}"
-	done
+	restore_floating_ota
 }
 
 backup_addons_space() {
 	# Check if there is enough space to backup addons
-	BACKUP_SIZE=$(du -cs "${INSTALLED_ADDONS_FULL}" | cut -f1 | tail -1)
+	BACKUP_SIZE=0
+	
+		
+	if [ "${SYSMOUNT}" == "/system_root" ]; then
+		for file in ${ADDONS}/files-list/*.txt; do
+		  while IFS="" read -r p || [ -n "$p" ]; do
+		  	FILE_LIST=$(echo ${p} | sed -e 's@'/system'@'/system_root/system'@g')
+				ADDON_FILE_LIST_SIZE=$(du -cs "${FILE_LIST}" | cut -f1 | tail -1)
+				BACKUP_SIZE=$(($BACKUP_SIZE + $ADDON_FILE_LIST_SIZE))
+			done < "${file}"
+		done
+	else
+		for file in ${ADDONS}/files-list/*.txt; do
+		  while IFS="" read -r p || [ -n "$p" ]; do
+		  	FILE_LIST=$(echo ${p})
+				ADDON_FILE_LIST_SIZE=$(du -cs "${FILE_LIST}" | cut -f1 | tail -1)
+				BACKUP_SIZE=$(($BACKUP_SIZE + $ADDON_FILE_LIST_SIZE))
+			done < "${file}"
+		done
+	fi
+
 	DATA_SIZE=$(df /data | tail -1 | awk '{print $4}')
 
 	# Remove Fresh Core Beta builds. Not backup-able and is replaced at install.
 	${BUSYBOX} find "${ADDONS}" -type f -name "io.tns.shadowx*" -delete
+	file_setprop "install.addons.size" "${BACKUP_SIZE}"
 
 	if (( "${BACKUP_SIZE}" >= "${DATA_SIZE}" )); then
 		file_setprop "install.addons.backup" "nospace"
 	else
 		file_setprop "install.addons.backup" "true"
+	fi
+}
+
+restore_addons_space() {
+	# Check if there is enough space to restore addons
+	if [ "${SYSMOUNT}" == "/system_root" ]; then
+		RESTORE_SIZE_SYSTEM=$(du -cs "${BACKUP_ADDONS_FOLDER}/system_root" | cut -f1 | tail -1)
+		SYSTEM_SIZE=$(df /system_root | tail -1 | awk '{print $4}')
+	else
+		RESTORE_SIZE_SYSTEM=$(du -cs "${BACKUP_ADDONS_FOLDER}/system" | cut -f1 | tail -1)
+		SYSTEM_SIZE=$(df /system | tail -1 | awk '{print $4}')
+	fi
+
+	RESTORE_SIZE_VENDOR=$(du -cs "${BACKUP_ADDONS_FOLDER}/vendor" | cut -f1 | tail -1)
+	VENDOR_SIZE=$(df /vendor | tail -1 | awk '{print $4}')
+	
+	RESTORE_SIZE_PRODUCT=$(du -cs "${BACKUP_ADDONS_FOLDER}/product" | cut -f1 | tail -1)
+	PRODUCT_SIZE=$(df /product | tail -1 | awk '{print $4}')
+
+	if (( "${RESTORE_SIZE_PRODUCT}" >= "${PRODUCT_SIZE}" )); then
+		file_setprop "install.addons.restore" "nospace"
+	else
+		if (( "${RESTORE_SIZE_VENDOR}" >= "${VENDOR_SIZE}" )); then
+			file_setprop "install.addons.restore" "nospace"
+		else
+			if (( "${RESTORE_SIZE_SYSTEM}" >= "${SYSTEM_SIZE}" )); then
+				file_setprop "install.addons.restore" "nospace"
+			else
+				file_setprop "install.addons.restore" "true"
+			fi
+		fi
 	fi
 }
 
@@ -510,7 +599,7 @@ flash_kernel_backup() {
 
 rom_version_check() {
 	# Make Tips number
-	file_setprop "rom.install.tip" "$(awk -v min=1 -v max=4 'BEGIN{srand(); print int(min+rand()*(max-min+1))}')"
+	file_setprop "rom.install.tip" "$(awk -v min=1 -v max=6 'BEGIN{srand(); print int(min+rand()*(max-min+1))}')"
 	
 	# Check for an existing ROM installation
 	if [ -e "${ROM}" ]; then
@@ -525,7 +614,11 @@ rom_version_check() {
 			if (( "${EXISTING}" > "${FLASHER}" )); then
 				file_setprop "system.exist.rom" "downgrade"
 			else
-				file_setprop "system.exist.rom" "true"
+				if [ $(data_check_noprop) == 'true' ]; then
+					file_setprop "system.exist.rom" "true"
+				else
+					file_setprop "system.exist.rom" "false"
+				fi
 			fi
 
 			# Jun2021: Check if there is a Fresh Core backup.
@@ -664,15 +757,25 @@ ota_version_check() {
 			fi
 		fi
 
-		# Check if there is a currently-installed version of upstream Fresh Core.
-		if [ -e "${ADDONS}/io.tns.shadowx.upstream.prop" ]; then
-			file_setprop "kernel.upstream.installed" "true"
-		else
-			file_setprop "kernel.upstream.installed" "false"
-		fi
+		# Jun2021: Check if there is a Fresh Core backup.
+		if [ -f '/tmp/fresh_core.prop' ]; then
+			if [ -f "${FRESH}/boot.img" -a $(data_check_noprop) == 'true' -a ]; then
+				ROM_BUILD=$(file_getprop '/tmp/fresh_core.prop' 'fresh.core.build')
+				CURRENT_BUILD=$(file_getprop "${FRESH}/fresh_core.prop" 'fresh.core.build')
 
-		# Delete staging builds
-		${BUSYBOX} find "${ADDONS}" -type f -name "io.tns.shadowx.staging*" -delete
+				if (( "${CURRENT_BUILD}" > "${ROM_BUILD}" )); then
+					file_setprop "kernel.backup.present" "true"
+					${BUSYBOX} cp -f "${FRESH}/boot.img" "/cache/boot.img"
+				else
+					file_setprop "kernel.backup.present" "false"
+				fi
+			else
+				file_setprop "kernel.backup.present" "false"
+			fi
+		else
+			file_setprop "kernel.backup.present" "false"
+		fi
+	
 
 	else
 		file_setprop "system.exist.rom" "false"
